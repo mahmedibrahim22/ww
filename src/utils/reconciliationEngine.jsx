@@ -29,10 +29,12 @@ export default function ReconciliationEngine() {
       "Items": item.items,
       "POS Net": item.posSub,
       "Talabat Net": item.talabatSub,
-      "Net Diff": item.diffSub,
+      "Net Diff Item": item.diffSub,
       "POS Delivery": item.posDeliv,
       "Talabat Delivery": item.talabatDeliv,
       "Delivery Diff": item.diffDeliv,
+      "إجمالي الفرق": item.totalDiff, // العمود الجديد المطلوب
+      "Talabat Voucher (150)": item.talabatVoucher,
       "Reason Item": item.mainReasonItem,
       "POS Item Price": item.reasonItemPosPrice,
       "Talabat Item Net": item.reasonItemTalabatPrice,
@@ -41,7 +43,7 @@ export default function ReconciliationEngine() {
       "Talabat VAT": item.talabatVAT,
       "POS Final Total": item.posTotal,
       "Talabat Final Total": item.talabatTotal,
-      "Total Discrepancy": item.diffFinal,
+      "Total Diff": item.diffFinal,
       "Notes": item.note
     }));
 
@@ -89,7 +91,6 @@ export default function ReconciliationEngine() {
       const outletRow = rows.find(r => String(r).includes("Outlet:"));
       const comsysBranch = outletRow ? String(outletRow).split(":")[1]?.trim() : "فرع غير معروف";
       
-      // تجهيز كلمة البحث عن الفرع لتصفية ملف طلبات
       const branchSearchKey = comsysBranch.replace(/Garnell/i, '').trim().toLowerCase();
 
       const talabatMap = new Map();
@@ -100,7 +101,6 @@ export default function ReconciliationEngine() {
         let rawId = item["Order ID"] || item["order_id"] || "";
         const id = String(rawId).replace(/"/g, '').trim();
         
-        // نخزن فقط الطلبات التي تخص الفرع المفتوح في كومسيس
         if (id && fullRestaurantName.includes(branchSearchKey)) {
           talabatMap.set(id, item);
           talabatBranchOrderIds.push(id);
@@ -120,59 +120,45 @@ export default function ReconciliationEngine() {
           
           if (vId) {
             allPosVoucherIds.push(vId);
-            if (currentCheck) allChecksFound.push(currentCheck);
-            currentCheck = { id: vId, items: [], itemsPrices: {}, posSub: 0, posDeliv: 0, posVAT: 0, talabatVoucher: 0, isClosed: false };
+            currentCheck = { id: vId, items: [], itemsPrices: {}, posSub: 0, posDeliv: 0, posVAT: 0, talabatVoucher: 0 };
           }
         }
 
         if (currentCheck) {
-          const findValueInRow = (keywords) => {
-            if (keywords.some(k => rowStr.includes(k))) {
-                const numericValues = row.map(c => String(c).replace(/,/g, '').trim()).filter(c => c !== "" && !isNaN(c));
-                return parseFloat(numericValues[numericValues.length - 1]) || 0;
-            }
-            return null;
-          };
+          const col1 = String(row[1] || "").trim();
+          const col4 = String(row[4] || "").trim();
+          const col5 = String(row[5] || "").trim();
+          const val8 = Math.abs(parseFloat(String(row[8] || "0").replace(/,/g, '')) || 0);
 
-          const subVal = findValueInRow(["Sub Total"]);
-          if (subVal !== null) currentCheck.posSub = Math.abs(subVal);
+          // استخراج القيم الأساسية بناءً على مسميات الأعمدة
+          if (col1 === "Sub Total") currentCheck.posSub = val8;
+          if (col5 === "Delivery Charge") currentCheck.posDeliv = val8;
+          if (col5 === "VAT") currentCheck.posVAT = val8;
 
-          const delivVal = findValueInRow(["Delivery Charge"]);
-          if (delivVal !== null) currentCheck.posDeliv = Math.abs(delivVal);
+          // استخراج الفتحور (كود 150)
+          if (col4 === "150.0" || col4 === "150") {
+            currentCheck.talabatVoucher = val8;
+          }
 
-          const vatVal = findValueInRow(["VAT"]);
-          if (vatVal !== null) currentCheck.posVAT = Math.abs(vatVal);
-
+          // استخراج الأصناف والكميات
           const rowCleaned = row.map(c => String(c).trim());
           const qnty = parseFloat(rowCleaned[6]);
           const price = parseFloat(rowCleaned[7]?.replace(/,/g, ''));
           const itemName = rowCleaned[5];
 
-          if (!isNaN(qnty) && itemName && itemName !== "" && !rowStr.includes("Sub Total") && !rowStr.includes("VAT")) {
+          if (!isNaN(qnty) && itemName && itemName !== "" && col1 !== "Sub Total" && col5 !== "VAT" && col5 !== "Delivery Charge") {
             currentCheck.items.push(`${itemName} (x${qnty})`);
             currentCheck.itemsPrices[itemName] = price;
           }
 
-          if (rowStr.includes("150.0") || rowStr.includes("150")) {
-             const v150 = findValueInRow(["150"]);
-             if (v150 !== null) currentCheck.talabatVoucher = Math.abs(v150);
-          }
-
           if (/closing\s*time/i.test(rowStr)) {
-            currentCheck.isClosed = true;
             allChecksFound.push(currentCheck);
             currentCheck = null;
           }
         }
       });
 
-      if (currentCheck) allChecksFound.push(currentCheck);
-
-      // --- حصر المفقودات بدقة ---
-      // 1. مفقودات طلبات: أي Voucher في كومسيس مش موجود في ملف طلبات
       const missingInT = allPosVoucherIds.filter(id => !talabatMap.has(id));
-      
-      // 2. مفقودات كومسيس: أي Order ID في طلبات (للفرع ده) مش موجود في كومسيس
       const posVoucherSet = new Set(allPosVoucherIds);
       const missingInP = talabatBranchOrderIds.filter(id => !posVoucherSet.has(id));
 
@@ -208,7 +194,6 @@ export default function ReconciliationEngine() {
               if (match) {
                 const talabatGross = parseFloat(match[1]);
                 const talabatNet = round(talabatGross / 1.14);
-                
                 if (Math.abs(posPrice - talabatNet) > 0.5) {
                   mainReasonItem = itemName;
                   resPosPrice = posPrice;
@@ -218,8 +203,12 @@ export default function ReconciliationEngine() {
                 }
               }
             }
-            if (mainReasonItem === "مطابق") mainReasonItem = "تحقق يدوي ";
+            if (mainReasonItem === "مطابق") mainReasonItem = "تحقق يدوي";
           }
+
+          // الإجمالي النهائي في كومسيس = (الصافي + التوصيل + الضريبة) - الفتحور المستخرج
+          const posFinalTotal = round(check.posSub + check.posDeliv + check.posVAT - check.talabatVoucher);
+          const talabatFinalTotal = round(tSubRaw + tDelivRaw);
 
           foundResults.push({
             id: check.id,
@@ -229,19 +218,21 @@ export default function ReconciliationEngine() {
             posSub: check.posSub,
             posDeliv: check.posDeliv,
             posVAT: check.posVAT,
-            posTotal: round(check.posSub + check.posDeliv + check.posVAT - check.talabatVoucher),
+            talabatVoucher: check.talabatVoucher,
+            posTotal: posFinalTotal,
             talabatSub: tSubComp,
             talabatDeliv: tDelivComp,
             talabatVAT: parseSafe(tItem["Tax Amount"]),
-            talabatTotal: round(tSubRaw + tDelivRaw),
+            talabatTotal: talabatFinalTotal,
             diffSub: diffSub,
             diffDeliv: diffDeliv,
-            diffFinal: round(diffSub + diffDeliv),
+            totalDiff: round(diffSub + diffDeliv), // حساب إجمالي الفرق المطلوب
+            diffFinal: round(Math.abs(posFinalTotal - talabatFinalTotal)),
             mainReasonItem: mainReasonItem,
             reasonItemPosPrice: resPosPrice,
             reasonItemTalabatPrice: resTalabatPriceNet,
             reasonItemDiff: resDiff,
-            note: `فرق اصناف: ${diffSub}`
+            note: check.talabatVoucher > 0 ? `خصم فوتشر: ${check.talabatVoucher}` : `فرق أصناف: ${diffSub}`
           });
         }
       });
@@ -263,8 +254,8 @@ export default function ReconciliationEngine() {
   return (
     <div className="max-w-7xl mx-auto px-4 py-8 space-y-8 bg-[#020c08] min-h-screen text-right" dir="rtl">
       <header className="text-center">
-        <h1 className="text-3xl font-bold text-[#10b981]">محرك المطابقة المطور - V5</h1>
-        <p className="text-gray-400 mt-2">نظام حصر مفقودات ملفات الفرع</p>
+        <h1 className="text-3xl font-bold text-[#10b981]">محرك المطابقة المطور - V5.3</h1>
+        <p className="text-gray-400 mt-2">نظام حصر مفقودات وتحليل الفواتير والـ Voucher</p>
       </header>
 
       {!isAnalyzed ? (
@@ -288,7 +279,7 @@ export default function ReconciliationEngine() {
             <SummaryDashboard data={summary} />
             <div className="bg-[#0d2a1f] p-4 rounded-xl border border-emerald-900">
               <div className="flex justify-between items-center mb-4">
-                 <h2 className="text-xl font-bold text-white">تفاصيل الفروقات والأصناف</h2>
+                 <h2 className="text-xl font-bold text-white">تفاصيل الفروقات والأصناف والـ Voucher</h2>
                  <button onClick={exportToExcel} className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg font-bold">تصدير Excel (EN)</button>
               </div>
               <DiscrepancyTable data={discrepancies} />
