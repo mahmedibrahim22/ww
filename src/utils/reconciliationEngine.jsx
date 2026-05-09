@@ -3,32 +3,63 @@ import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import SummaryDashboard from '../components/SummaryDashboard.jsx';
 import DiscrepancyTable from '../components/DiscrepancyTable.jsx';
-import ExportButton from '../components/ExportButton.jsx';
 
 export default function ReconciliationEngine() {
   const [talabatData, setTalabatData] = useState([]);
   const [checkData, setCheckData] = useState([]);
   const [summary, setSummary] = useState(null);
   const [discrepancies, setDiscrepancies] = useState([]);
-  const [missingVouchers, setMissingVouchers] = useState([]);
-  const [missingFromComsys, setMissingFromComsys] = useState([]);
+  const [missingInTalabat, setMissingInTalabat] = useState([]); // مفقودات ملف talabat
+  const [missingInPos, setMissingInPos] = useState([]); // مفقودات ملف check details
   const [isAnalyzed, setIsAnalyzed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  // دالة النسخ
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
+    alert("تم النسخ: " + text);
+  };
+
+  const exportToExcel = () => {
+    if (discrepancies.length === 0) return;
+    const exportData = discrepancies.map(item => ({
+      "Order ID": item.id,
+      "Branch (Talabat)": item.branchName,
+      "Branch (Comsys)": item.comsysBranch,
+      "Items": item.items,
+      "POS Net": item.posSub,
+      "Talabat Net": item.talabatSub,
+      "Net Diff": item.diffSub,
+      "POS Delivery": item.posDeliv,
+      "Talabat Delivery": item.talabatDeliv,
+      "Delivery Diff": item.diffDeliv,
+      "Reason Item": item.mainReasonItem,
+      "POS Item Price": item.reasonItemPosPrice,
+      "Talabat Item Net": item.reasonItemTalabatPrice,
+      "Price Diff": item.reasonItemDiff,
+      "POS VAT": item.posVAT,
+      "Talabat VAT": item.talabatVAT,
+      "POS Final Total": item.posTotal,
+      "Talabat Final Total": item.talabatTotal,
+      "Total Discrepancy": item.diffFinal,
+      "Notes": item.note
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Reconciliation_Report");
+    XLSX.writeFile(workbook, `Reconciliation_Report_${new Date().toLocaleDateString()}.xlsx`);
+  };
 
   const handleFileUpload = (e, type) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    
     if (file.name.endsWith('.csv')) {
       reader.onload = (event) => {
         if (type === 'check') setCheckData(event.target.result);
         else {
-          Papa.parse(event.target.result, {
-            header: true,
-            skipEmptyLines: true,
-            complete: (results) => setTalabatData(results.data)
-          });
+          Papa.parse(event.target.result, { header: true, skipEmptyLines: true, complete: (results) => setTalabatData(results.data) });
         }
       };
       reader.readAsText(file);
@@ -51,167 +82,244 @@ export default function ReconciliationEngine() {
       return;
     }
     setIsLoading(true);
-    
+
     setTimeout(() => {
       const foundResults = [];
-      const missing = [];
-      const notInComsys = [];
-      let totalAbsoluteDiffAccumulator = 0; 
-
       const rows = Array.isArray(checkData) ? checkData : checkData.split('\n').map(r => r.split(','));
       const outletRow = rows.find(r => String(r).includes("Outlet:"));
       const comsysBranch = outletRow ? String(outletRow).split(":")[1]?.trim() : "فرع غير معروف";
+      
+      // تجهيز كلمة البحث عن الفرع لتصفية ملف طلبات
+      const branchSearchKey = comsysBranch.replace(/Garnell/i, '').trim().toLowerCase();
 
       const talabatMap = new Map();
+      const talabatBranchOrderIds = [];
+
       talabatData.forEach(item => {
-        const status = (item["Order status"] || item["order_status"] || "").toLowerCase();
-        const payment = (item["Payment method"] || item["payment_method"] || "").toLowerCase();
-        const id = String(item["Order ID"] || item["order_id"] || "").replace(/"/g, '').trim();
-        if (id && status !== "cancelled" && payment.includes("credit")) {
+        const fullRestaurantName = String(item["Restaurant name"] || "").toLowerCase();
+        let rawId = item["Order ID"] || item["order_id"] || "";
+        const id = String(rawId).replace(/"/g, '').trim();
+        
+        // نخزن فقط الطلبات التي تخص الفرع المفتوح في كومسيس
+        if (id && fullRestaurantName.includes(branchSearchKey)) {
           talabatMap.set(id, item);
+          talabatBranchOrderIds.push(id);
         }
       });
 
       let currentCheck = null;
-      const matchedIds = new Set();
+      let allChecksFound = [];
+      let allPosVoucherIds = [];
 
       rows.forEach((row) => {
-        const rowStr = row.join(" ");
-
-        // 1. اكتشاف بداية الشيك (Voucher ID)
-        if (rowStr.includes("Voucher:")) {
-          const vId = rowStr.match(/Voucher:\s*(\d+)/)?.[1];
-          currentCheck = { 
-            id: vId, 
-            items: [], 
-            posSub: 0, 
-            posDeliv: 0, 
-            posTotalAdjusted: 0, 
-            talabatVoucher: 0, 
-            talabatService: 0 
-          };
+        const rowStr = row.join(" ").replace(/\s+/g, ' ').trim();
+        
+        if (rowStr.toLowerCase().includes("voucher:")) {
+          const vMatch = rowStr.match(/voucher:\s*(\d+)/i);
+          const vId = vMatch ? vMatch[1] : null;
+          
+          if (vId) {
+            allPosVoucherIds.push(vId);
+            if (currentCheck) allChecksFound.push(currentCheck);
+            currentCheck = { id: vId, items: [], itemsPrices: {}, posSub: 0, posDeliv: 0, posVAT: 0, talabatVoucher: 0, isClosed: false };
+          }
         }
 
         if (currentCheck) {
-          // جلب رقم "الكود" والقيمة اللي قدامه (في الغالب العمود 4 هو الكود و 8 هو المبلغ)
-          const itemID = String(row[4] || "").trim();
-          const itemValue = parseFloat(row[8]) || 0;
+          const findValueInRow = (keywords) => {
+            if (keywords.some(k => rowStr.includes(k))) {
+                const numericValues = row.map(c => String(c).replace(/,/g, '').trim()).filter(c => c !== "" && !isNaN(c));
+                return parseFloat(numericValues[numericValues.length - 1]) || 0;
+            }
+            return null;
+          };
 
-          // 2. سحب البيانات بناءً على الأكواد اللي حددتها
-          if (itemID === "132") {
-            currentCheck.posTotalAdjusted = itemValue; // إجمالي كومسيس المصفى
-          } else if (itemID === "150") {
-            currentCheck.talabatVoucher = Math.abs(itemValue); // طلبات فواتشر
-          } else if (itemID === "2104") {
-            currentCheck.talabatService = Math.abs(itemValue); // طلبات سيرفيس
+          const subVal = findValueInRow(["Sub Total"]);
+          if (subVal !== null) currentCheck.posSub = Math.abs(subVal);
+
+          const delivVal = findValueInRow(["Delivery Charge"]);
+          if (delivVal !== null) currentCheck.posDeliv = Math.abs(delivVal);
+
+          const vatVal = findValueInRow(["VAT"]);
+          if (vatVal !== null) currentCheck.posVAT = Math.abs(vatVal);
+
+          const rowCleaned = row.map(c => String(c).trim());
+          const qnty = parseFloat(rowCleaned[6]);
+          const price = parseFloat(rowCleaned[7]?.replace(/,/g, ''));
+          const itemName = rowCleaned[5];
+
+          if (!isNaN(qnty) && itemName && itemName !== "" && !rowStr.includes("Sub Total") && !rowStr.includes("VAT")) {
+            currentCheck.items.push(`${itemName} (x${qnty})`);
+            currentCheck.itemsPrices[itemName] = price;
           }
 
-          // سحب الصافي والدليفري العاديين للمقارنة
-          if (rowStr.includes("Sub Total")) currentCheck.posSub = itemValue;
-          if (rowStr.includes("Delivery Charge")) currentCheck.posDeliv = itemValue;
-          
-          // تجميع محتويات الشيك (الأصناف العادية)
-          if (row[5] && !isNaN(row[6]) && !["132", "150", "2104"].includes(itemID)) {
-            currentCheck.items.push(`${row[5]} (x${row[6]})`);
+          if (rowStr.includes("150.0") || rowStr.includes("150")) {
+             const v150 = findValueInRow(["150"]);
+             if (v150 !== null) currentCheck.talabatVoucher = Math.abs(v150);
           }
-        }
 
-        // 3. نهاية الشيك والمطابقة مع شيت طلبات
-        if (rowStr.includes("Balance Due") && currentCheck) {
-          const tItem = talabatMap.get(currentCheck.id);
-          if (tItem) {
-            matchedIds.add(currentCheck.id);
-            const tSubRaw = parseFloat(String(tItem["Subtotal"] || 0).replace(/,/g, ''));
-            const tDelivRaw = parseFloat(String(tItem["Delivery Fee"] || 0).replace(/,/g, ''));
-            const round = (num) => Math.round(num * 100) / 100;
-
-            const tSubCompared = round(tSubRaw / 1.14);
-            const tDelivCompared = round(tDelivRaw / 1.14);
-
-            const dSub = Math.abs(round(currentCheck.posSub) - tSubCompared);
-            const dDeliv = Math.abs(round(currentCheck.posDeliv) - tDelivCompared);
-            const finalCheckDiff = Math.abs(dSub + dDeliv);
-
-            foundResults.push({
-              id: currentCheck.id,
-              branchName: tItem["Restaurant name"] || "طلب مجهول",
-              comsysBranch: comsysBranch,
-              items: currentCheck.items.join(" | "),
-              posSub: currentCheck.posSub,
-              talabatSub: tSubCompared,
-              diffSub: dSub, 
-              posDeliv: currentCheck.posDeliv,
-              talabatDeliv: tDelivCompared,
-              diffDeliv: dDeliv,
-              posTotal: currentCheck.posTotalAdjusted, // الرقم اللي قدام 132
-              talabatTotal: round(tSubRaw + tDelivRaw),
-              diffFinal: finalCheckDiff,
-              talabatVoucher: currentCheck.talabatVoucher, // الرقم اللي قدام 150
-              talabatService: currentCheck.talabatService, // الرقم اللي قدام 2104
-              note: `كود 132: ${currentCheck.posTotalAdjusted} | كود 150: ${currentCheck.talabatVoucher}`
-            });
-            totalAbsoluteDiffAccumulator += finalCheckDiff;
-          } else {
-            missing.push({ id: currentCheck.id, posTotal: currentCheck.posTotalAdjusted });
+          if (/closing\s*time/i.test(rowStr)) {
+            currentCheck.isClosed = true;
+            allChecksFound.push(currentCheck);
+            currentCheck = null;
           }
-          currentCheck = null;
         }
       });
 
-      // الفواتير الموجودة في طلبات ومش في كومسيس
-      talabatMap.forEach((item, id) => {
-        if (!matchedIds.has(id)) {
-          notInComsys.push({ id, talabatTotal: parseFloat(item["Subtotal"] || 0) + parseFloat(item["Delivery Fee"] || 0) });
+      if (currentCheck) allChecksFound.push(currentCheck);
+
+      // --- حصر المفقودات بدقة ---
+      // 1. مفقودات طلبات: أي Voucher في كومسيس مش موجود في ملف طلبات
+      const missingInT = allPosVoucherIds.filter(id => !talabatMap.has(id));
+      
+      // 2. مفقودات كومسيس: أي Order ID في طلبات (للفرع ده) مش موجود في كومسيس
+      const posVoucherSet = new Set(allPosVoucherIds);
+      const missingInP = talabatBranchOrderIds.filter(id => !posVoucherSet.has(id));
+
+      setMissingInTalabat([...new Set(missingInT)]);
+      setMissingInPos([...new Set(missingInP)]);
+
+      allChecksFound.forEach(check => {
+        const tItem = talabatMap.get(check.id);
+        if (tItem) {
+          const round = (n) => Math.round(n * 100) / 100;
+          const parseSafe = (val) => parseFloat(String(val || 0).replace(/,/g, '').replace(/"/g, '')) || 0;
+
+          const tSubRaw = parseSafe(tItem["Subtotal"]);
+          const tDelivRaw = parseSafe(tItem["Delivery Fee"]);
+          const tSubComp = round(tSubRaw / 1.14);
+          const tDelivComp = round(tDelivRaw / 1.14);
+
+          const diffSub = round(Math.abs(check.posSub - tSubComp));
+          const diffDeliv = round(Math.abs(check.posDeliv - tDelivComp));
+
+          let mainReasonItem = "مطابق";
+          let resPosPrice = 0;
+          let resTalabatPriceNet = 0;
+          let resDiff = 0;
+
+          if (diffSub > 0.1) {
+            const orderItemsRaw = tItem["Order Items"] || "";
+            for (let itemName in check.itemsPrices) {
+              const posPrice = check.itemsPrices[itemName];
+              const regex = new RegExp(itemName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ".*?(\\d+\\.?\\d*)", "i");
+              const match = orderItemsRaw.match(regex);
+              
+              if (match) {
+                const talabatGross = parseFloat(match[1]);
+                const talabatNet = round(talabatGross / 1.14);
+                
+                if (Math.abs(posPrice - talabatNet) > 0.5) {
+                  mainReasonItem = itemName;
+                  resPosPrice = posPrice;
+                  resTalabatPriceNet = talabatNet;
+                  resDiff = round(Math.abs(posPrice - talabatNet));
+                  break;
+                }
+              }
+            }
+            if (mainReasonItem === "مطابق") mainReasonItem = "تحقق يدوي ";
+          }
+
+          foundResults.push({
+            id: check.id,
+            branchName: tItem["Restaurant name"],
+            comsysBranch: comsysBranch,
+            items: check.items.join(" | "),
+            posSub: check.posSub,
+            posDeliv: check.posDeliv,
+            posVAT: check.posVAT,
+            posTotal: round(check.posSub + check.posDeliv + check.posVAT - check.talabatVoucher),
+            talabatSub: tSubComp,
+            talabatDeliv: tDelivComp,
+            talabatVAT: parseSafe(tItem["Tax Amount"]),
+            talabatTotal: round(tSubRaw + tDelivRaw),
+            diffSub: diffSub,
+            diffDeliv: diffDeliv,
+            diffFinal: round(diffSub + diffDeliv),
+            mainReasonItem: mainReasonItem,
+            reasonItemPosPrice: resPosPrice,
+            reasonItemTalabatPrice: resTalabatPriceNet,
+            reasonItemDiff: resDiff,
+            note: `فرق اصناف: ${diffSub}`
+          });
         }
       });
 
       setSummary({
-        posTotal: foundResults.reduce((acc, curr) => acc + curr.posTotal, 0).toFixed(2),
-        settlementTotal: foundResults.reduce((acc, curr) => acc + curr.talabatTotal, 0).toFixed(2),
-        diffTotal: totalAbsoluteDiffAccumulator.toFixed(2), 
+        posTotal: foundResults.reduce((acc, c) => acc + c.posTotal, 0).toFixed(2),
+        settlementTotal: foundResults.reduce((acc, c) => acc + c.talabatTotal, 0).toFixed(2),
+        diffTotal: foundResults.reduce((acc, c) => acc + c.diffFinal, 0).toFixed(2),
         checksCount: foundResults.length,
-        missingCount: missing.length + notInComsys.length
+        missingCount: missingInT.length + missingInP.length 
       });
+
       setDiscrepancies(foundResults);
-      setMissingVouchers(missing);
-      setMissingFromComsys(notInComsys);
       setIsAnalyzed(true);
       setIsLoading(false);
-    }, 1000);
+    }, 800);
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-8 space-y-8 bg-[#020c08] min-h-screen text-[#d1fae5] text-right" dir="rtl">
-      <header className="text-center space-y-2">
-        <h1 className="text-3xl font-bold text-[#10b981]">نظام مطابقة جرنيال - استخراج الأكواد (132, 150, 2104)</h1>
-        <p className="text-[#648b7a]">يتم سحب الأرقام مباشرة من الخانة المقابلة للكود في تقرير كومسيس</p>
+    <div className="max-w-7xl mx-auto px-4 py-8 space-y-8 bg-[#020c08] min-h-screen text-right" dir="rtl">
+      <header className="text-center">
+        <h1 className="text-3xl font-bold text-[#10b981]">محرك المطابقة المطور - V5</h1>
+        <p className="text-gray-400 mt-2">نظام حصر مفقودات ملفات الفرع</p>
       </header>
 
       {!isAnalyzed ? (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 max-w-4xl mx-auto shadow-2xl">
-          <div className="grid md:grid-cols-2 gap-6 text-center">
-            <div className="p-6 border border-dashed border-emerald-900 rounded-xl bg-[#0d2a1f]">
-              <span className="block mb-4 text-emerald-400 font-bold">تقرير كومسيس (Excel/CSV)</span>
-              <input type="file" onChange={(e) => handleFileUpload(e, 'check')} className="text-xs text-gray-400" />
+        <div className="bg-gray-900 p-10 rounded-2xl border border-gray-800 shadow-2xl max-w-2xl mx-auto">
+            <div className="space-y-6">
+              <div className="flex flex-col gap-2">
+                <label className="text-emerald-400 font-bold">ملف كومسيس (Check Details):</label>
+                <input type="file" onChange={(e) => handleFileUpload(e, 'check')} className="text-sm text-gray-500 file:bg-emerald-900 file:text-white file:border-none file:px-4 file:py-2 file:rounded-lg" />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-emerald-400 font-bold">ملف طلبات (Talabat):</label>
+                <input type="file" onChange={(e) => handleFileUpload(e, 'talabat')} className="text-sm text-gray-500 file:bg-emerald-900 file:text-white file:border-none file:px-4 file:py-2 file:rounded-lg" />
+              </div>
+              <button onClick={handleAnalyze} className="w-full py-4 bg-[#10b981] text-black font-black rounded-xl hover:bg-emerald-400 transition-all">
+                {isLoading ? "جاري التحليل..." : "تحليل البيانات وحصر المفقودات"}
+              </button>
             </div>
-            <div className="p-6 border border-dashed border-emerald-900 rounded-xl bg-[#0d2a1f]">
-              <span className="block mb-4 text-emerald-400 font-bold">شيت طلبات (Excel/CSV)</span>
-              <input type="file" onChange={(e) => handleFileUpload(e, 'talabat')} className="text-xs text-gray-400" />
-            </div>
-          </div>
-          <button onClick={handleAnalyze} className="w-full mt-8 py-4 bg-[#10b981] text-black font-bold rounded-xl hover:bg-emerald-400 transition-all shadow-lg">
-            {isLoading ? "جاري قراءة الأكواد 132 و 150..." : "ابدأ التحليل والمطابقة"}
-          </button>
         </div>
       ) : (
-        <div className="space-y-8 animate-fade-in">
-          <SummaryDashboard data={summary} />
-          <div className="bg-[#0d2a1f] p-6 rounded-xl border border-emerald-900 shadow-xl">
-            <h2 className="text-[#10b981] font-bold mb-4">📊 نتائج تحليل الأكواد المحاسبية</h2>
-            <DiscrepancyTable data={discrepancies} />
-            <div className="mt-6 flex justify-end gap-2"><ExportButton data={discrepancies} /></div>
-          </div>
-          <button onClick={() => setIsAnalyzed(false)} className="text-gray-500 hover:text-white underline text-sm block mx-auto py-4">تصفير ورفع ملفات جديدة</button>
+        <div className="space-y-6">
+            <SummaryDashboard data={summary} />
+            <div className="bg-[#0d2a1f] p-4 rounded-xl border border-emerald-900">
+              <div className="flex justify-between items-center mb-4">
+                 <h2 className="text-xl font-bold text-white">تفاصيل الفروقات والأصناف</h2>
+                 <button onClick={exportToExcel} className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg font-bold">تصدير Excel (EN)</button>
+              </div>
+              <DiscrepancyTable data={discrepancies} />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+               <div className="bg-gray-900 p-6 rounded-xl border border-red-900 shadow-lg">
+                 <div className="flex justify-between items-center mb-4">
+                   <h3 className="text-red-400 font-bold">مفقودات ملف talabat ({missingInTalabat.length})</h3>
+                   <button onClick={() => copyToClipboard(missingInTalabat.join('\n'))} className="bg-red-800 hover:bg-red-700 text-white text-xs px-3 py-1 rounded">نسخ الكل</button>
+                 </div>
+                 <div className="grid grid-cols-3 gap-2 max-h-60 overflow-y-auto p-2 bg-black rounded-lg">
+                   {missingInTalabat.length > 0 ? missingInTalabat.map(id => (
+                     <div key={id} onClick={() => copyToClipboard(id)} className="bg-gray-800 p-2 rounded text-center text-xs text-red-200 border border-red-900/50 cursor-pointer hover:bg-red-900 transition-colors">{id}</div>
+                   )) : <p className="text-gray-600 text-xs col-span-3 text-center">لا يوجد مفقودات</p>}
+                 </div>
+               </div>
+
+               <div className="bg-gray-900 p-6 rounded-xl border border-orange-900 shadow-lg">
+                 <div className="flex justify-between items-center mb-4">
+                   <h3 className="text-orange-400 font-bold">مفقودات ملف check details ({missingInPos.length})</h3>
+                   <button onClick={() => copyToClipboard(missingInPos.join('\n'))} className="bg-orange-800 hover:bg-orange-700 text-white text-xs px-3 py-1 rounded">نسخ الكل</button>
+                 </div>
+                 <div className="grid grid-cols-3 gap-2 max-h-60 overflow-y-auto p-2 bg-black rounded-lg">
+                   {missingInPos.length > 0 ? missingInPos.map(id => (
+                     <div key={id} onClick={() => copyToClipboard(id)} className="bg-gray-800 p-2 rounded text-center text-xs text-orange-200 border border-orange-900/50 cursor-pointer hover:bg-orange-900 transition-colors">{id}</div>
+                   )) : <p className="text-gray-600 text-xs col-span-3 text-center">لا يوجد مفقودات</p>}
+                 </div>
+               </div>
+            </div>
+            <button onClick={() => setIsAnalyzed(false)} className="block mx-auto text-gray-500 underline">إعادة ضبط</button>
         </div>
       )}
     </div>
