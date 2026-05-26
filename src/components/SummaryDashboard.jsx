@@ -1,17 +1,19 @@
 import React from 'react';
 
 export default function SummaryDashboard({ data }) {
-  // حل مشكلة الـ TypeError نهائياً وتجهيز البيانات
-  // نعتمد هنا على القيم القادمة من محرك المطابقة (Engine)
   const summary = {
     totalPOS: Number(data?.totalPOS || 0),
     totalTalabat: Number(data?.totalTalabat || 0),
     totalDifference: Number(data?.totalDifference || 0),
     totalChecks: Number(data?.totalChecks || 0),
-    // إضافة تفاصيل التشريح للملخص إذا أردت توسيعه لاحقاً
     totalTaxDiff: Number(data?.totalTaxDiff || 0),
     totalDelivDiff: Number(data?.totalDelivDiff || 0),
+    totalDiscounts: Number(data?.totalDiscounts || 0),
+    totalComplimentary: Number(data?.totalComplimentary || 0),
+    missingInCashier: Number(data?.missingInCashier || 0),
   };
+
+  const hasDiffData = summary.totalDiscounts > 0 || summary.totalComplimentary > 0 || summary.missingInCashier > 0;
 
   return (
     <div className="bg-[#020c08] text-gray-300 p-6 rounded-xl border border-[#1a3d2f] max-w-6xl mx-auto shadow-2xl font-sans" dir="rtl">
@@ -26,8 +28,9 @@ export default function SummaryDashboard({ data }) {
         </p>
       </div>
 
-      {/* Main Grid for Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* Main Grid for Cards - Reconciliation */}
+      <p className="text-[#648b7a] text-xs font-bold uppercase tracking-widest mb-3 text-right">مطابقة طلبات التوصيل</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         
         {/* Card 1: Total POS */}
         <div className="bg-[#0d2a1f]/40 border border-[#1a3d2f] p-5 rounded-lg flex flex-col justify-between h-40 transition-all duration-300 hover:bg-[#0d2a1f]/60 hover:border-[#10b981]/50 group relative overflow-hidden">
@@ -61,7 +64,7 @@ export default function SummaryDashboard({ data }) {
           </div>
         </div>
 
-        {/* Card 3: Total Difference (The Gap) */}
+        {/* Card 3: Total Difference */}
         <div className="bg-[#0d2a1f]/40 border border-[#1a3d2f] p-5 rounded-lg flex flex-col justify-between h-40 transition-all duration-300 hover:bg-[#0d2a1f]/60 group relative overflow-hidden">
           <div className={`absolute top-0 left-0 w-1 h-full ${Math.abs(summary.totalDifference) > 1 ? 'bg-red-500' : 'bg-emerald-500'} opacity-40 group-hover:opacity-100 transition-opacity`}></div>
           <div>
@@ -95,8 +98,67 @@ export default function SummaryDashboard({ data }) {
         
       </div>
 
+      {/* Discount Section - يظهر فقط لو فيه بيانات خصومات */}
+      {hasDiffData && (
+        <>
+          <div className="border-t border-[#1a3d2f] mb-6"></div>
+          <p className="text-[#648b7a] text-xs font-bold uppercase tracking-widest mb-3 text-right">مراجعة الخصومات والكمبلمنتري</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-8">
+
+            {/* Card: Total Discounts */}
+            <div className="bg-[#0d2a1f]/40 border border-[#1a3d2f] p-5 rounded-lg flex flex-col justify-between h-36 transition-all duration-300 hover:bg-[#0d2a1f]/60 hover:border-yellow-500/30 group relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-1 h-full bg-yellow-400 opacity-40 group-hover:opacity-100 transition-opacity"></div>
+              <div>
+                <span className="text-[#648b7a] text-xs uppercase tracking-wider block mb-1 font-bold group-hover:text-yellow-400 transition-colors">
+                  إجمالي أوردرات الخصم
+                </span>
+                <span className="text-2xl font-bold text-yellow-400 mt-2 block font-mono">
+                  {summary.totalDiscounts}
+                </span>
+              </div>
+              <div className="text-[#4b6b5d] text-[10px] mt-2 border-t border-[#1a3d2f] pt-2">
+                <span>أوردرات Discounted Items</span>
+              </div>
+            </div>
+
+            {/* Card: Total Complimentary */}
+            <div className="bg-[#0d2a1f]/40 border border-[#1a3d2f] p-5 rounded-lg flex flex-col justify-between h-36 transition-all duration-300 hover:bg-[#0d2a1f]/60 hover:border-purple-500/30 group relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-1 h-full bg-purple-400 opacity-40 group-hover:opacity-100 transition-opacity"></div>
+              <div>
+                <span className="text-[#648b7a] text-xs uppercase tracking-wider block mb-1 font-bold group-hover:text-purple-400 transition-colors">
+                  إجمالي أوردرات الكمبلمنتري
+                </span>
+                <span className="text-2xl font-bold text-purple-400 mt-2 block font-mono">
+                  {summary.totalComplimentary}
+                </span>
+              </div>
+              <div className="text-[#4b6b5d] text-[10px] mt-2 border-t border-[#1a3d2f] pt-2">
+                <span>أوردرات Complimentary</span>
+              </div>
+            </div>
+
+            {/* Card: Missing in Cashier */}
+            <div className="bg-[#0d2a1f]/40 border border-[#1a3d2f] p-5 rounded-lg flex flex-col justify-between h-36 transition-all duration-300 hover:bg-[#0d2a1f]/60 hover:border-red-500/30 group relative overflow-hidden">
+              <div className={`absolute top-0 left-0 w-1 h-full ${summary.missingInCashier > 0 ? 'bg-red-500' : 'bg-emerald-500'} opacity-40 group-hover:opacity-100 transition-opacity`}></div>
+              <div>
+                <span className="text-[#648b7a] text-xs uppercase tracking-wider block mb-1 font-bold group-hover:text-red-400 transition-colors">
+                  مش مسجل في شيت الكاشير
+                </span>
+                <span className={`text-2xl font-bold mt-2 block font-mono ${summary.missingInCashier > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                  {summary.missingInCashier}
+                </span>
+              </div>
+              <div className="text-[#4b6b5d] text-[10px] mt-2 border-t border-[#1a3d2f] pt-2">
+                <span>{summary.missingInCashier > 0 ? '⚠ يحتاج مراجعة' : '✓ كل الأوردرات مسجلة'}</span>
+              </div>
+            </div>
+
+          </div>
+        </>
+      )}
+
       {/* Footer Info Box */}
-      <div className="mt-8 bg-[#0d2a1f]/20 border border-[#1a3d2f]/50 p-4 rounded-lg flex items-start space-x-3 space-x-reverse">
+      <div className="mt-2 bg-[#0d2a1f]/20 border border-[#1a3d2f]/50 p-4 rounded-lg flex items-start space-x-3 space-x-reverse">
         <div className="text-[#10b981] mt-0.5 ml-3">
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />

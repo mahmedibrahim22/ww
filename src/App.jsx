@@ -2,7 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import ReconciliationEngine from './utils/reconciliationEngine';
 import DailySalesReportFiller from './pages/DailySalesReportFiller';
-
+import DiscountReconciliation from "./pages/DiscountReconciliation";
 // ══════════════════════════════════════════════════════════════════════════
 //  الهيدر الرئيسي + ناف بار التنقل (بنفس الاستايل الأصلي)
 // ══════════════════════════════════════════════════════════════════════════
@@ -27,6 +27,16 @@ function Header() {
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
             d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+        </svg>
+      ),
+    },
+    {
+      to:    '/discounts',
+      label: 'الخصومات',
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+            d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z" />
         </svg>
       ),
     },
@@ -151,6 +161,31 @@ function DailySalesPage() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+//  صفحة الخصومات والكمبلمنتري (الصفحة الثالثة)
+// ══════════════════════════════════════════════════════════════════════════
+function DiscountPage() {
+  return (
+    <main className="py-12 px-4 md:px-8">
+      <div className="max-w-7xl mx-auto">
+
+        <div className="mb-10 text-right">
+          <h2 className="text-[#10b981] text-sm font-bold mb-2">وحدة مراجعة الخصومات والكمبلمنتري</h2>
+          <p className="text-gray-400 text-xs max-w-2xl leading-relaxed">
+            ارفع شيت الكاشير وملفات Discounted Items وComplimentary لمطابقة السيريالات وإضافة الأسباب تلقائياً.
+          </p>
+        </div>
+
+        <section className="relative">
+          <div className="absolute -top-20 -right-20 w-64 h-64 bg-[#10b981]/5 rounded-full blur-3xl pointer-events-none"></div>
+          <DiscountReconciliation />
+        </section>
+
+      </div>
+    </main>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 //  الفوتر - نفس الأصل
 // ══════════════════════════════════════════════════════════════════════════
 function Footer() {
@@ -180,8 +215,9 @@ function App() {
         <Header />
 
         <Routes>
-          <Route path="/"      element={<ReconciliationPage />} />
-          <Route path="/daily" element={<DailySalesPage />} />
+          <Route path="/"          element={<ReconciliationPage />} />
+          <Route path="/daily"     element={<DailySalesPage />} />
+          <Route path="/discounts" element={<DiscountPage />} />
         </Routes>
 
         <Footer />
